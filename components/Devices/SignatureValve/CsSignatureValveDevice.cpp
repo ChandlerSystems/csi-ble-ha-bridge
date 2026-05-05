@@ -258,7 +258,7 @@ bool CsSignatureValveDevice::UpdateHaCapabilities()
 {
     CsSignatureValveHaCapability caps = CsSignatureValveHaCapability::None;
 
-    if (CsSignatureValveTypeHasSaltDose(_state.GenDeviceType, _state.DlIsTwinValve))
+    if (CsSignatureValveTypeIsMeteredSoftener(_state.GenDeviceType, _state.DlIsTwinValve))
     {
         caps = caps | CsSignatureValveHaCapability::IsSoftener;
     }
