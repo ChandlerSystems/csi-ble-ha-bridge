@@ -182,7 +182,11 @@ public:
 
 public:
     virtual bool IsConnected() const { return _connectionState >= CsBleConnectionState::Connected;}
-    virtual bool IsConnecting() const { return _connectionState == CsBleConnectionState::Connecting; }
+    virtual bool IsConnecting() const
+    {
+        return _connectionState == CsBleConnectionState::Connecting ||
+               _connectionState == CsBleConnectionState::Reconnecting;
+    }
     virtual bool IsReady() const { return _connectionState == CsBleConnectionState::Ready; }
 
 public:

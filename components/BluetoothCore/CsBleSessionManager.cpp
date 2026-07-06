@@ -87,7 +87,7 @@ void CsBleSessionManager::RequestConnection(CsBleDevice* device, const CsBleConn
         return;
     }
 
-    if (!device->Connect())
+    if (!device->Connect(true))
     {
         ESP_LOGE(CsBleSessionManager::Tag(), "Failed to start device connection");
     }

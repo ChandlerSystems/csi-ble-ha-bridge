@@ -9,8 +9,8 @@ namespace SignatureBridge::Config
 
     constexpr const char* MqttHost = "CHANGE_ME"; // Example: "192.168.4.179"
     constexpr int MqttPort = 1883;
-    constexpr const char* MqttUsername = "CHANGE_ME"; // Example: "mqtt"
-    constexpr const char* MqttPassword = "CHANGE_ME"; // Example: "correct horse battery staple"
+    constexpr const char* MqttUsername = "mqtt"; // Example: "mqtt"
+    constexpr const char* MqttPassword = "mqtt"; // Example: "correct horse battery staple"
     constexpr const char* MqttClientId = "csi-ha-ble-bridge";
 
     constexpr const char* HaDiscoveryPrefix = "homeassistant";

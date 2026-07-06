@@ -3,6 +3,13 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <unistd.h>
+#include "esp_netif.h"
+
 namespace SignatureBridge::Mqtt {
 
 CsMqttClient& CsMqttClient::Instance()
@@ -30,6 +37,20 @@ bool CsMqttClient::Start(const CsMqttClientConfig& config)
     {
         ESP_LOGE(CsMqttClient::Tag(), "MQTT host is empty");
         return false;
+    }
+
+    esp_netif_ip_info_t ipInfo;
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+
+    if (netif != nullptr && esp_netif_get_ip_info(netif, &ipInfo) == ESP_OK)
+    {
+        ESP_LOGI(
+            "Network",
+            "IP=%d.%d.%d.%d Gateway=%d.%d.%d.%d Netmask=%d.%d.%d.%d",
+            IP2STR(&ipInfo.ip),
+            IP2STR(&ipInfo.gw),
+            IP2STR(&ipInfo.netmask)
+        );
     }
 
     esp_mqtt_client_config_t mqttConfig = {};

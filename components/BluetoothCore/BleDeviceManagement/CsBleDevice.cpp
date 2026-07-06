@@ -522,7 +522,7 @@ void CsBleDevice::AttemptReconnect()
     ESP_LOGI(CsBleDevice::Tag(), "Attempting reconnect [Attempt: %u]", static_cast<unsigned>(_reconnectAttempts + 1U));
     SetConnectionState(CsBleConnectionState::Connecting);
 
-    if (!Connect())
+    if (!Connect(true))
     {
         ESP_LOGW(CsBleDevice::Tag(), "Reconnect attempt failed immediately");
         ++_reconnectAttempts;
