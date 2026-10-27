@@ -18,11 +18,14 @@ void CsApp::Initialize()
 {
     ESP_LOGI(CsApp::Tag(), "Initializing application...");
 
+    // Start MQTT even if WiFi isn't up yet. WiFi keeps retrying in the background, and the MQTT client connects on
+    // its own once the network is available, so a slow or missing network at power up isn't permanent.
     if (!StartWifi())
     {
-        ESP_LOGE(CsApp::Tag(), "Failed to start WiFi; MQTT and HA publishing will be unavailable");
+        ESP_LOGW(CsApp::Tag(), "WiFi not connected yet; it will keep retrying in the background");
     }
-    else if (!StartMqtt())
+
+    if (!StartMqtt())
     {
         ESP_LOGE(CsApp::Tag(), "Failed to start MQTT; HA publishing will be unavailable");
     }
@@ -71,6 +74,7 @@ bool CsApp::StartMqtt()
     mqttConfig.Username = MqttUsername;
     mqttConfig.Password = MqttPassword;
     mqttConfig.ClientId = MqttClientId;
+    mqttConfig.StatusTopic = std::string(HaBaseTopic) + "/status";
 
     if (!CsMqttClient::Instance().Start(mqttConfig))
     {
@@ -80,14 +84,7 @@ bool CsApp::StartMqtt()
     if (!CsMqttClient::Instance().WaitForConnected(10000))
     {
         ESP_LOGW(CsApp::Tag(), "MQTT client did not connect before timeout; it may reconnect asynchronously");
-        return true;
     }
-
-    CsMqttClient::Instance().Publish(
-        "signature_bridge/status",
-        "{\"status\":\"online\"}",
-        true
-    );
 
     return true;
 }

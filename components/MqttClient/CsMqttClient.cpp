@@ -62,6 +62,16 @@ bool CsMqttClient::Start(const CsMqttClientConfig& config)
     mqttConfig.credentials.authentication.password = config.Password.empty() ? nullptr : config.Password.c_str();
     mqttConfig.network.disable_auto_reconnect = !config.AutoReconnect;
 
+    _statusTopic = config.StatusTopic;
+
+    if (!_statusTopic.empty())
+    {
+        mqttConfig.session.last_will.topic = _statusTopic.c_str();
+        mqttConfig.session.last_will.msg = "offline";
+        mqttConfig.session.last_will.qos = 1;
+        mqttConfig.session.last_will.retain = 1;
+    }
+
     _client = esp_mqtt_client_init(&mqttConfig);
 
     if (_client == nullptr)
@@ -234,9 +244,17 @@ void CsMqttClient::OnMqttEvent(esp_mqtt_event_handle_t event)
     {
         case MQTT_EVENT_CONNECTED:
         {
-            std::lock_guard<std::mutex> lock(_mutex);
-            _connected = true;
-            ESP_LOGI(CsMqttClient::Tag(), "MQTT connected");
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _connected = true;
+                ESP_LOGI(CsMqttClient::Tag(), "MQTT connected");
+            }
+
+            if (!_statusTopic.empty())
+            {
+                esp_mqtt_client_enqueue(_client, _statusTopic.c_str(), "online", 0, 1, 1, true);
+            }
+
             break;
         }
 

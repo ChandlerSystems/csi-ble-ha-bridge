@@ -10,10 +10,10 @@
 #include "BleCore/CsBleJsonWriteCommand.h"
 #include "BleCore/CsBleResolvedGattProfile.h"
 #include "BleTransport/CsBleQueueProcessor.h"
+#include "BleUtilities/CsBleHostTimer.h"
 #include "BleUtilities/CsBleUtilities.h"
 #include <array>
 #include <cstdint>
-#include <esp_timer.h>
 #include <host/ble_gap.h>
 #include <host/ble_gatt.h>
 #include <host/ble_uuid.h>
@@ -221,8 +221,6 @@ private:
     void ContinueInitializationAfterSubscription();
 
 private:
-    void InitializeReconnectTimer();
-    void DestroyReconnectTimer();
     void ScheduleReconnect();
     void CancelReconnect();
     void AttemptReconnect();
@@ -232,9 +230,13 @@ private:
     bool StartAuthentication();
     void SetReady();
     bool SendDisconnectCommand();
+    void AbortConnection(const char* reason);
+    void RestartLinkWatchdog(uint32_t timeoutMs);
+    void HandleLinkWatchdog();
 
 private:
     static void ReconnectTimerCallback(void* arg);
+    static void LinkWatchdogTimerCallback(void* arg);
 
 protected:
     static int OnServiceDiscovered(
@@ -331,7 +333,10 @@ protected:
     uint8_t _reconnectAttempts = 0;
     uint32_t _minReconnectDelayMs = 500;
     uint32_t _maxReconnectDelayMs = 5000;
-    esp_timer_handle_t _reconnectTimer = nullptr;
+    static constexpr uint32_t HandshakeTimeoutMs = 30000U;
+    static constexpr uint32_t LinkSilenceTimeoutMs = 10000U;
+    BleUtilities::CsBleHostTimer _reconnectTimer{&CsBleDevice::ReconnectTimerCallback, this};
+    BleUtilities::CsBleHostTimer _linkWatchdogTimer{&CsBleDevice::LinkWatchdogTimerCallback, this};
 
 private:
     std::unique_ptr<BleTransport::CsBleQueueProcessor> _queueProcessor;

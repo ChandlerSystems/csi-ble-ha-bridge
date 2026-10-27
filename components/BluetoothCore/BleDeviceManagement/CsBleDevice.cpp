@@ -5,7 +5,6 @@
 #include "BleTransport/CsBleQueueProcessor.h"
 #include <algorithm>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <host/ble_gap.h>
 #include <host/ble_gatt.h>
 #include <host/ble_hs.h>
@@ -20,13 +19,12 @@ CsBleDevice::CsBleDevice()
 
 CsBleDevice::~CsBleDevice()
 {
-    DestroyReconnectTimer();
+    _reconnectTimer.Stop();
+    _linkWatchdogTimer.Stop();
 }
 
 void CsBleDevice::UpdateAdvertisement(const CsBleAdvertisement& advertisement)
 {
-    InitializeReconnectTimer();
-
     _advertisement = advertisement;
 
     _combinedAdvertisementData = CsBleUtilities::Instance().CombineAdvertisementPayloads(
@@ -185,6 +183,7 @@ int CsBleDevice::BleGapEventHandler(struct ble_gap_event* event)
                 _connHandle = event->connect.conn_handle;
                 _authState = CsBleAuthState::Unauthenticated;
                 SetConnectionState(CsBleConnectionState::Connected);
+                RestartLinkWatchdog(HandshakeTimeoutMs);
 
                 ESP_LOGI(CsBleDevice::Tag(), "Connected! [Connection Handle: %u]", _connHandle);
 
@@ -228,8 +227,24 @@ int CsBleDevice::BleGapEventHandler(struct ble_gap_event* event)
         case BLE_GAP_EVENT_NOTIFY_RX:
         {
             const auto valueHandle = event->notify_rx.attr_handle;
-            const auto* buffer = event->notify_rx.om->om_data;
-            const auto length = event->notify_rx.om->om_len;
+
+            // A notification can span a chain of mbufs (e.g. a long packet at a large MTU), so copy the whole
+            // chain rather than reading only the first mbuf.
+            const uint16_t length = OS_MBUF_PKTLEN(event->notify_rx.om);
+            std::vector<uint8_t> data(length);
+
+            if (length > 0U && os_mbuf_copydata(event->notify_rx.om, 0, length, data.data()) != 0)
+            {
+                ESP_LOGW(CsBleDevice::Tag(), "Failed to copy notification data [Length: %u]", length);
+                return 0;
+            }
+
+            const uint8_t* buffer = data.data();
+
+            if (_connectionState == CsBleConnectionState::Ready)
+            {
+                RestartLinkWatchdog(LinkSilenceTimeoutMs);
+            }
 
             const CsBleGattCharacteristic* matchedCharacteristic = nullptr;
 
@@ -405,6 +420,7 @@ void CsBleDevice::ClearConnectionSession()
         _queueProcessor->Reset();
     }
 
+    _linkWatchdogTimer.Stop();
     _initializationQueuedWorkPending = false;
     _connHandle = BLE_HS_CONN_HANDLE_NONE;
     _negotiatedMtu = CsBleMinMtu;
@@ -414,42 +430,6 @@ void CsBleDevice::ClearConnectionSession()
     _cccdHandle = 0;
     _resolvedGattProfile = {};
     _authState = CsBleAuthState::Unknown;
-}
-
-void CsBleDevice::InitializeReconnectTimer()
-{
-    if (_reconnectTimer != nullptr)
-    {
-        return;
-    }
-
-    const esp_timer_create_args_t timerArgs = {
-        .callback = &CsBleDevice::ReconnectTimerCallback,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "ble_reconnect",
-        .skip_unhandled_events = true
-    };
-
-    const auto result = esp_timer_create(&timerArgs, &_reconnectTimer);
-
-    if (result != ESP_OK)
-    {
-        ESP_LOGE(CsBleDevice::Tag(), "Failed to create reconnect timer: %s", esp_err_to_name(result));
-        _reconnectTimer = nullptr;
-    }
-}
-
-void CsBleDevice::DestroyReconnectTimer()
-{
-    if (_reconnectTimer == nullptr)
-    {
-        return;
-    }
-
-    esp_timer_stop(_reconnectTimer);
-    esp_timer_delete(_reconnectTimer);
-    _reconnectTimer = nullptr;
 }
 
 void CsBleDevice::ScheduleReconnect()
@@ -473,26 +453,14 @@ void CsBleDevice::ScheduleReconnect()
         return;
     }
 
-    InitializeReconnectTimer();
-
-    if (_reconnectTimer == nullptr)
-    {
-        ESP_LOGE(CsBleDevice::Tag(), "Reconnect timer unavailable");
-        return;
-    }
-
     const auto delayMs = GetNextReconnectDelayMs();
     _reconnectScheduled = true;
 
     SetConnectionState(CsBleConnectionState::Reconnecting);
     ESP_LOGI(CsBleDevice::Tag(), "Reconnect scheduled in %lu ms", static_cast<unsigned long>(delayMs));
-    esp_timer_stop(_reconnectTimer);
-
-    const auto result = esp_timer_start_once(_reconnectTimer, static_cast<uint64_t>(delayMs) * 1000ULL);
-
-    if (result != ESP_OK)
+    if (!_reconnectTimer.Start(delayMs))
     {
-        ESP_LOGE(CsBleDevice::Tag(), "Failed to start reconnect timer: %s", esp_err_to_name(result));
+        ESP_LOGE(CsBleDevice::Tag(), "Failed to start reconnect timer");
         _reconnectScheduled = false;
         SetConnectionState(CsBleConnectionState::Idle);
     }
@@ -501,11 +469,7 @@ void CsBleDevice::ScheduleReconnect()
 void CsBleDevice::CancelReconnect()
 {
     _reconnectScheduled = false;
-
-    if (_reconnectTimer != nullptr)
-    {
-        esp_timer_stop(_reconnectTimer);
-    }
+    _reconnectTimer.Stop();
 }
 
 void CsBleDevice::AttemptReconnect()
@@ -567,6 +531,7 @@ void CsBleDevice::SetReady()
     CancelReconnect();
     ResetReconnectBackoff();
     SetConnectionState(CsBleConnectionState::Ready);
+    RestartLinkWatchdog(LinkSilenceTimeoutMs);
     OnReady();
 }
 
@@ -583,6 +548,84 @@ bool CsBleDevice::SendDisconnectCommand()
     ESP_LOGI(CsBleDevice::Tag(), "Disconnect command sent");
 
     return true;
+}
+
+void CsBleDevice::AbortConnection(const char* reason)
+{
+    _linkWatchdogTimer.Stop();
+
+    if (_connHandle == BLE_HS_CONN_HANDLE_NONE)
+    {
+        return;
+    }
+
+    ESP_LOGW(CsBleDevice::Tag(), "Dropping the connection so it can be re-established [Reason: %s]", reason);
+    const int result = ble_gap_terminate(_connHandle, BLE_ERR_REM_USER_CONN_TERM);
+
+    if (result == ESUCCESS || result == BLE_HS_EALREADY)
+    {
+        return;
+    }
+
+    if (result == BLE_HS_ENOTCONN)
+    {
+        ESP_LOGW(CsBleDevice::Tag(), "Connection was already gone; cleaning up the session");
+
+        ClearConnectionSession();
+        SetConnectionState(CsBleConnectionState::Idle);
+        OnDisconnected(BLE_HS_ENOTCONN);
+
+        if (ShouldAutoReconnect(BLE_HS_ENOTCONN))
+        {
+            ScheduleReconnect();
+        }
+
+        return;
+    }
+
+    ESP_LOGE(CsBleDevice::Tag(), "Failed to terminate the connection [Result: %d]; retrying", result);
+    RestartLinkWatchdog(LinkSilenceTimeoutMs);
+}
+
+void CsBleDevice::RestartLinkWatchdog(uint32_t timeoutMs)
+{
+    if (!_linkWatchdogTimer.Start(timeoutMs))
+    {
+        ESP_LOGE(CsBleDevice::Tag(), "Failed to start the link watchdog");
+    }
+}
+
+void CsBleDevice::HandleLinkWatchdog()
+{
+    if (_connHandle == BLE_HS_CONN_HANDLE_NONE)
+    {
+        return;
+    }
+
+    if (_connectionState == CsBleConnectionState::Ready)
+    {
+        AbortConnection("No data from the device; the link appears to be dead");
+    }
+    else if (_connectionState == CsBleConnectionState::Authenticating)
+    {
+        AbortConnection("Authentication didn't complete; check that the auth token is correct");
+    }
+    else
+    {
+        AbortConnection("Connection setup didn't complete in time");
+    }
+}
+
+void CsBleDevice::LinkWatchdogTimerCallback(void* arg)
+{
+    auto* device = static_cast<CsBleDevice*>(arg);
+
+    if (device == nullptr)
+    {
+        return;
+    }
+
+    device->HandleLinkWatchdog();
 }
 
 void CsBleDevice::ReconnectTimerCallback(void* arg)
@@ -621,7 +664,7 @@ bool CsBleDevice::StartServiceDiscovery()
     if (result != ESUCCESS)
     {
         ESP_LOGE(CsBleDevice::Tag(), "Service discovery failed to start: %d", result);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return false;
     }
 
@@ -658,7 +701,7 @@ bool CsBleDevice::DiscoverCharacteristicsForNextService()
     if (result != ESUCCESS)
     {
         ESP_LOGE(CsBleDevice::Tag(), "Characteristic discovery failed to start: %d", result);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return false;
     }
 
@@ -678,7 +721,7 @@ bool CsBleDevice::StartMtuExchange()
     if (result != ESUCCESS)
     {
         ESP_LOGE(CsBleDevice::Tag(), "MTU exchange failed to start: %d", result);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return false;
     }
 
@@ -699,7 +742,7 @@ void CsBleDevice::ContinueInitializationAfterSubscription()
     if (!OnInitialize())
     {
         ESP_LOGE(CsBleDevice::Tag(), "Device-specific initialization failed");
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
@@ -715,7 +758,7 @@ void CsBleDevice::ContinueInitializationAfterSubscription()
     if (!StartAuthentication())
     {
         ESP_LOGE(CsBleDevice::Tag(), "Failed to start authentication");
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
     }
 }
 
@@ -851,7 +894,7 @@ void CsBleDevice::HandleServiceDiscoveryResult(const ble_gatt_error* error, cons
     }
 
     ESP_LOGE(CsBleDevice::Tag(), "Service discovery error: %d", error->status);
-    SetConnectionState(CsBleConnectionState::Connected);
+    AbortConnection("Connection setup failed");
 }
 
 void CsBleDevice::HandleCharacteristicDiscoveryResult(
@@ -909,7 +952,7 @@ void CsBleDevice::HandleCharacteristicDiscoveryResult(
     }
 
     ESP_LOGE(CsBleDevice::Tag(), "Characteristic discovery error: %d", error->status);
-    SetConnectionState(CsBleConnectionState::Connected);
+    AbortConnection("Connection setup failed");
 }
 
 void CsBleDevice::HandleMtuExchangeResult(const ble_gatt_error* error, uint16_t mtu)
@@ -923,7 +966,7 @@ void CsBleDevice::HandleMtuExchangeResult(const ble_gatt_error* error, uint16_t 
     if (error->status != 0)
     {
         ESP_LOGE(CsBleDevice::Tag(), "MTU exchange failed: %d", error->status);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
@@ -932,7 +975,7 @@ void CsBleDevice::HandleMtuExchangeResult(const ble_gatt_error* error, uint16_t 
     if (mtu <= AttHeaderSize)
     {
         ESP_LOGE(CsBleDevice::Tag(), "Negotiated MTU too small: %u", mtu);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
@@ -944,14 +987,14 @@ void CsBleDevice::HandleMtuExchangeResult(const ble_gatt_error* error, uint16_t 
     if (!ResolveGattProfile())
     {
         ESP_LOGE(CsBleDevice::Tag(), "Failed to resolve GATT profile");
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
     if (!SubscribeToReadCharacteristic())
     {
         ESP_LOGE(CsBleDevice::Tag(), "Failed to subscribe to read characteristic");
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 }
@@ -1025,14 +1068,14 @@ void CsBleDevice::HandleCccdWriteResult(const ble_gatt_error* error)
     if (error == nullptr)
     {
         ESP_LOGE(CsBleDevice::Tag(), "CCCD write callback returned null error");
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
     if (error->status != 0)
     {
         ESP_LOGE(CsBleDevice::Tag(), "Failed to enable notifications: %d", error->status);
-        SetConnectionState(CsBleConnectionState::Connected);
+        AbortConnection("Connection setup failed");
         return;
     }
 
@@ -1170,7 +1213,7 @@ void CsBleDevice::OnQueueProcessorIdle()
         if (!StartAuthentication())
         {
             ESP_LOGE(CsBleDevice::Tag(), "Failed to start authentication");
-            SetConnectionState(CsBleConnectionState::Connected);
+            AbortConnection("Connection setup failed");
         }
 
         return;

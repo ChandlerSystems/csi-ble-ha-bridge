@@ -7,6 +7,7 @@
 #include <freertos/event_groups.h>
 #include <esp_event.h>
 #include <esp_netif.h>
+#include <esp_timer.h>
 
 namespace SignatureBridge::Wifi {
 
@@ -39,10 +40,14 @@ private:
     bool EnsurePlatformInitialized();
     void OnWifiEvent(esp_event_base_t eventBase, int32_t eventId, void* eventData);
     void OnIpEvent(esp_event_base_t eventBase, int32_t eventId, void* eventData);
+    void ScheduleReconnect();
+    static void ReconnectTimerCallback(void* arg);
 
 private:
     static constexpr EventBits_t ConnectedBit = BIT0;
     static constexpr EventBits_t FailedBit = BIT1;
+    static constexpr uint32_t MinReconnectDelayMs = 5000U;
+    static constexpr uint32_t MaxReconnectDelayMs = 60000U;
 
 private:
     bool _started = false;
@@ -53,6 +58,8 @@ private:
     esp_netif_t* _stationNetif = nullptr;
     esp_event_handler_instance_t _wifiEventHandler = nullptr;
     esp_event_handler_instance_t _ipEventHandler = nullptr;
+    esp_timer_handle_t _reconnectTimer = nullptr;
+    uint32_t _reconnectDelayMs = MinReconnectDelayMs;
 };
 
 }

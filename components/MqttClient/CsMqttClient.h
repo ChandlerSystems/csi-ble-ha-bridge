@@ -41,6 +41,7 @@ private:
     esp_mqtt_client_handle_t _client = nullptr;
     bool _started = false;
     bool _connected = false;
+    std::string _statusTopic;
 };
 
 }

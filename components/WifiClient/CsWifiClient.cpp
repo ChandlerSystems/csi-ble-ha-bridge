@@ -1,4 +1,5 @@
 #include "CsWifiClient.h"
+#include <algorithm>
 #include <cstring>
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -232,6 +233,13 @@ void CsWifiClient::Stop()
         _wifiEventHandler = nullptr;
     }
 
+    if (_reconnectTimer != nullptr)
+    {
+        esp_timer_stop(_reconnectTimer);
+        esp_timer_delete(_reconnectTimer);
+        _reconnectTimer = nullptr;
+    }
+
     if (_started)
     {
         esp_wifi_stop();
@@ -278,7 +286,7 @@ void CsWifiClient::HandleWifiEvent(void* handlerArgs, esp_event_base_t eventBase
 void CsWifiClient::HandleIpEvent(void* handlerArgs, esp_event_base_t eventBase, int32_t eventId, void* eventData)
 {
     auto* self = static_cast<CsWifiClient*>(handlerArgs);
-    
+
     if (self != nullptr)
     {
         self->OnIpEvent(eventBase, eventId, eventData);
@@ -311,8 +319,47 @@ void CsWifiClient::OnWifiEvent(esp_event_base_t, int32_t eventId, void*)
             return;
         }
 
-        ESP_LOGE(CsWifiClient::Tag(), "WiFi connection failed after retries");
+        ESP_LOGE(CsWifiClient::Tag(), "WiFi connection failed after retries; retrying in the background");
         xEventGroupSetBits(_eventGroup, FailedBit);
+        ScheduleReconnect();
+    }
+}
+
+void CsWifiClient::ScheduleReconnect()
+{
+    if (_reconnectTimer == nullptr)
+    {
+        const esp_timer_create_args_t timerArgs = {
+            .callback = &CsWifiClient::ReconnectTimerCallback,
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "wifi_reconnect",
+            .skip_unhandled_events = true
+        };
+
+        if (esp_timer_create(&timerArgs, &_reconnectTimer) != ESP_OK)
+        {
+            ESP_LOGE(CsWifiClient::Tag(), "Failed to create the WiFi reconnect timer");
+            _reconnectTimer = nullptr;
+            return;
+        }
+    }
+
+    ESP_LOGW(CsWifiClient::Tag(), "Retrying WiFi in %lu ms", static_cast<unsigned long>(_reconnectDelayMs));
+
+    esp_timer_stop(_reconnectTimer);
+    esp_timer_start_once(_reconnectTimer, static_cast<uint64_t>(_reconnectDelayMs) * 1000ULL);
+
+    _reconnectDelayMs = std::min(_reconnectDelayMs * 2U, MaxReconnectDelayMs);
+}
+
+void CsWifiClient::ReconnectTimerCallback(void* arg)
+{
+    auto* self = static_cast<CsWifiClient*>(arg);
+
+    if (self != nullptr && self->_started && !self->_connected)
+    {
+        esp_wifi_connect();
     }
 }
 
@@ -325,6 +372,7 @@ void CsWifiClient::OnIpEvent(esp_event_base_t, int32_t eventId, void* eventData)
 
     auto* event = static_cast<ip_event_got_ip_t*>(eventData);
     _retryCount = 0;
+    _reconnectDelayMs = MinReconnectDelayMs;
     _connected = true;
 
     ESP_LOGI(

@@ -12,6 +12,7 @@ struct CsMqttClientConfig
     std::string Password;
     std::string ClientId = "csi-ha-ble-bridge";
     bool AutoReconnect = true;
+    std::string StatusTopic;
 };
 
 }

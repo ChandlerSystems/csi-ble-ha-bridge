@@ -9,34 +9,11 @@ using namespace SignatureBridge::BluetoothCore::BleDeviceManagement;
 using namespace SignatureBridge::BluetoothCore::BleTransport;
 
 CsBleQueueProcessor::CsBleQueueProcessor(CsBleDevice& device)
-    : _device(device)
-{
-    const esp_timer_create_args_t timerArgs = {
-        .callback = &CsBleQueueProcessor::TimeoutTimerCallback,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "ble_queue_timeout",
-        .skip_unhandled_events = true
-    };
-
-    const auto result = esp_timer_create(&timerArgs, &_timeoutTimer);
-
-    if (result != ESP_OK)
-    {
-        ESP_LOGE(CsBleQueueProcessor::Tag(), "Failed to create timeout timer: %s", esp_err_to_name(result));
-        _timeoutTimer = nullptr;
-    }
-}
+    : _device(device) { }
 
 CsBleQueueProcessor::~CsBleQueueProcessor()
 {
     StopTimeoutTimer();
-
-    if (_timeoutTimer != nullptr)
-    {
-        esp_timer_delete(_timeoutTimer);
-        _timeoutTimer = nullptr;
-    }
 }
 
 bool CsBleQueueProcessor::EnqueueDataPayload(
@@ -274,27 +251,15 @@ void CsBleQueueProcessor::RetryCurrentEntry(const char* reason)
 
 void CsBleQueueProcessor::StartTimeoutTimer(uint32_t timeoutMs)
 {
-    if (_timeoutTimer == nullptr)
+    if (!_timeoutTimer.Start(timeoutMs))
     {
-        return;
-    }
-
-    esp_timer_stop(_timeoutTimer);
-
-    const auto result = esp_timer_start_once(_timeoutTimer, static_cast<uint64_t>(timeoutMs) * 1000ULL);
-
-    if (result != ESP_OK)
-    {
-        ESP_LOGE(CsBleQueueProcessor::Tag(), "Failed to start timeout timer: %s", esp_err_to_name(result));
+        ESP_LOGE(CsBleQueueProcessor::Tag(), "Failed to start timeout timer");
     }
 }
 
 void CsBleQueueProcessor::StopTimeoutTimer()
 {
-    if (_timeoutTimer != nullptr)
-    {
-        esp_timer_stop(_timeoutTimer);
-    }
+    _timeoutTimer.Stop();
 }
 
 void CsBleQueueProcessor::HandleTimeout()
@@ -371,7 +336,7 @@ void CsBleQueueProcessor::OnKeepAliveReceived(const CsBlePacketTransportHeader& 
 {
     if (header.IsStatusKeepAliveMarco())
     {
-        ESP_LOGI(CsBleQueueProcessor::Tag(), "Keep-alive Marco received; responding with Polo");
+        ESP_LOGD(CsBleQueueProcessor::Tag(), "Keep-alive Marco received; responding with Polo");
 
         const auto polo = BuildKeepAlivePacket(CsBleKeepAliveType::Polo);
         _device.WriteRaw(polo.data(), polo.size());
@@ -380,7 +345,7 @@ void CsBleQueueProcessor::OnKeepAliveReceived(const CsBlePacketTransportHeader& 
 
     if (header.IsStatusKeepAlivePolo())
     {
-        ESP_LOGI(CsBleQueueProcessor::Tag(), "Keep-alive Polo received");
+        ESP_LOGD(CsBleQueueProcessor::Tag(), "Keep-alive Polo received");
         return;
     }
 

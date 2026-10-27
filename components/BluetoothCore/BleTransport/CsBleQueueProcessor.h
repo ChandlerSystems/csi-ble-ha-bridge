@@ -2,7 +2,7 @@
 #include "CsBlePacketTransport.h"
 #include "CsBleQueueEntry.h"
 #include "CsBleQueueCompletionType.h"
-#include "esp_timer.h"
+#include "BleUtilities/CsBleHostTimer.h"
 #include <cstdint>
 #include <deque>
 #include <vector>
@@ -77,7 +77,7 @@ private:
     std::deque<CsBleQueueEntry> _queue;
     bool _hasActiveEntry = false;
     CsBleQueueEntry _activeEntry = {};
-    esp_timer_handle_t _timeoutTimer = nullptr;
+    BleUtilities::CsBleHostTimer _timeoutTimer{&CsBleQueueProcessor::TimeoutTimerCallback, this};
 };
 
 }

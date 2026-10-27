@@ -133,6 +133,11 @@ static std::string BuildAvailabilityTopic(const std::string& deviceId)
     return std::string(BaseTopic) + "/" + deviceId + "/availability";
 }
 
+static std::string BuildBridgeStatusTopic()
+{
+    return std::string(BaseTopic) + "/status";
+}
+
 static std::string BuildDiscoveryTopic(
     const std::string& deviceId,
     const CsSignatureValveHaEntityDefinition& entity
@@ -170,9 +175,13 @@ static std::string BuildDiscoveryPayload(
     json << "\"unique_id\":\"" << JsonEscape(uniqueId) << "\",";
     json << "\"state_topic\":\"" << JsonEscape(stateTopic) << "\",";
     json << "\"value_template\":\"{{ value_json." << JsonEscape(SanitizeTopicPart(entity.ObjectId)) << " }}\",";
-    json << "\"availability_topic\":\"" << JsonEscape(availabilityTopic) << "\",";
-    json << "\"payload_available\":\"online\",";
-    json << "\"payload_not_available\":\"offline\",";
+    json << "\"availability\":[";
+    json << "{\"topic\":\"" << JsonEscape(BuildBridgeStatusTopic()) << "\",";
+    json << "\"payload_available\":\"online\",\"payload_not_available\":\"offline\"},";
+    json << "{\"topic\":\"" << JsonEscape(availabilityTopic) << "\",";
+    json << "\"payload_available\":\"online\",\"payload_not_available\":\"offline\"}";
+    json << "],";
+    json << "\"availability_mode\":\"all\",";
 
     if (entity.Type == CsSignatureValveHaEntityType::BinarySensor)
     {
