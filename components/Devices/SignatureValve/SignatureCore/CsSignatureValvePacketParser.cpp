@@ -305,7 +305,7 @@ bool CsSignatureValvePacketParser::ApplyScalarChange(
             return true;
 
         case CsSignatureValvePacketKey::ShGallonsSinceLastRegen:
-            state.ShGallonsSinceLastRegen = static_cast<float>(raw) / 100.0f;
+            state.ShGallonsSinceLastRegen = ConvertGallonCounter(state, raw);
             return true;
 
         case CsSignatureValvePacketKey::ShRegenCounter:
@@ -317,11 +317,11 @@ bool CsSignatureValvePacketParser::ApplyScalarChange(
             return true;
 
         case CsSignatureValvePacketKey::ShGallonsTotalizer:
-            state.ShGallonsTotalizer = static_cast<float>(raw) / 100.0f;
+            state.ShGallonsTotalizer = ConvertGallonCounter(state, raw);
             return true;
 
         case CsSignatureValvePacketKey::ShGallonsTotalizerResettable:
-            state.ShGallonsTotalizerResettable = static_cast<float>(raw) / 100.0f;
+            state.ShGallonsTotalizerResettable = ConvertGallonCounter(state, raw);
             return true;
 
         // Global
@@ -541,6 +541,17 @@ uint8_t CsSignatureValvePacketParser::GetBatteryCapacity(float volts)
     if (volts >= 7.43f) return static_cast<uint8_t>(81.84f - (8.48f - volts) * 60.47f);
     if (volts >= 6.50f) return static_cast<uint8_t>(18.68f - (7.43f - volts) * 20.02f);
     return 0;
+}
+
+float CsSignatureValvePacketParser::ConvertGallonCounter(const CsSignatureValveState& state, int32_t raw)
+{
+    // As of C6.19, the valve sends the gallons since last regen and the gallon totalizers as raw quarter gallon counts.
+    // C6.18 and earlier send them in hundredths of a gallon.
+    constexpr uint32_t FirstQuarterGallonFirmwareVersion = 619U;
+
+    const double divisor = state.GenFirmwareVersion >= FirstQuarterGallonFirmwareVersion ? 4.0 : 100.0;
+
+    return static_cast<float>(static_cast<double>(static_cast<uint32_t>(raw)) / divisor);
 }
 
 std::vector<float> CsSignatureValvePacketParser::ConvertPeakFlowGraph(const std::vector<int32_t>& values)

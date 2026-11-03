@@ -39,6 +39,7 @@ private:
 
 private:
     [[nodiscard]] static uint8_t GetBatteryCapacity(float volts);
+    [[nodiscard]] static float ConvertGallonCounter(const CsSignatureValveState& state, int32_t raw);
 
 private:
     [[nodiscard]] static std::vector<float> ConvertPeakFlowGraph(const std::vector<int32_t>& values);
