@@ -325,7 +325,7 @@ protected:
     CsBleResolvedGattProfile _resolvedGattProfile = {};
     uint16_t _cccdHandle = 0;
     CsBleAuthState _authState = CsBleAuthState::Unknown;
-    std::optional<std::array<uint8_t, 16>> _authToken;
+    std::optional<std::array<uint8_t, AuthTokenLength>> _authToken;
 
 protected:
     bool _autoReconnectEnabled = false;
@@ -333,6 +333,7 @@ protected:
     uint8_t _reconnectAttempts = 0;
     uint32_t _minReconnectDelayMs = 500;
     uint32_t _maxReconnectDelayMs = 5000;
+    static constexpr size_t AuthTokenLength = 17U;
     static constexpr uint32_t HandshakeTimeoutMs = 30000U;
     static constexpr uint32_t LinkSilenceTimeoutMs = 10000U;
     BleUtilities::CsBleHostTimer _reconnectTimer{&CsBleDevice::ReconnectTimerCallback, this};

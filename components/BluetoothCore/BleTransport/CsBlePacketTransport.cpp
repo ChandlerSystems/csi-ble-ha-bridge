@@ -2,6 +2,7 @@
 #include "CsCoreUtils.h"
 #include "CsCrc16.h"
 #include <cJSON.h>
+#include <cstdint>
 #include <cstring>
 #include <esp_log.h>
 #include <string>
@@ -487,7 +488,17 @@ bool CsBlePacketTransport::TryDecodeJsonValue(const cJSON* item, CsBlePacketValu
     if (cJSON_IsNumber(item))
     {
         value.Type = CsBlePacketValueType::Int;
-        value.IntValue = item->valueint;
+        const double number = item->valuedouble;
+
+        if (number > static_cast<double>(INT32_MAX) && number <= static_cast<double>(UINT32_MAX))
+        {
+            value.IntValue = static_cast<int32_t>(static_cast<uint32_t>(number));
+        }
+        else
+        {
+            value.IntValue = item->valueint;
+        }
+
         return true;
     }
 

@@ -1233,15 +1233,15 @@ bool CsBleDevice::SetAuthenticationToken(const std::string& token)
         }
     }
 
-    if (normalized.size() != 32U)
+    if (normalized.size() != AuthTokenLength * 2U)
     {
         ESP_LOGE(CsBleDevice::Tag(), "Invalid auth token length");
         return false;
     }
 
-    std::array<uint8_t, 16> bytes{};
+    std::array<uint8_t, AuthTokenLength> bytes{};
 
-    for (size_t i = 0; i < 16U; ++i)
+    for (size_t i = 0; i < AuthTokenLength; ++i)
     {
         const std::string byteString = normalized.substr(i * 2U, 2U);
         char* end = nullptr;

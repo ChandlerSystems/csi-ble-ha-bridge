@@ -21,7 +21,7 @@ public:
 
 public:
     CsBleHostTimer(Callback callback, void* arg)
-        : _callback(callback), _arg(arg) { }
+        : _arg(arg), _callback(callback) { }
 
     ~CsBleHostTimer()
     {

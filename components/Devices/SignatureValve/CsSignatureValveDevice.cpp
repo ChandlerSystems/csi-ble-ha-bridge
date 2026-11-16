@@ -160,6 +160,41 @@ void CsSignatureValveDevice::OnPacketDecoded(const std::vector<CsBlePacketChange
         return;
     }
 
+    using SignatureBridge::BluetoothCore::BleCore::CsBleAuthState;
+    using SignatureBridge::Devices::SignatureValve::SignatureCore::CsSignatureValveAuthState;
+
+    for (const auto& change : changes)
+    {
+        if (change.Key != "as")
+        {
+            continue;
+        }
+
+        switch (_state.AuthState)
+        {
+            case CsSignatureValveAuthState::Authenticated:
+                UpdateAuthenticationState(CsBleAuthState::Authenticated);
+                break;
+
+            case CsSignatureValveAuthState::Unauthenticated:
+                UpdateAuthenticationState(CsBleAuthState::Unauthenticated);
+                break;
+
+            case CsSignatureValveAuthState::RateLimited:
+                UpdateAuthenticationState(CsBleAuthState::RateLimited);
+                break;
+
+            case CsSignatureValveAuthState::AuthRequestTimedOut:
+                UpdateAuthenticationState(CsBleAuthState::AuthRequestTimedOut);
+                break;
+
+            default:
+                break;
+        }
+
+        break;
+    }
+
     const bool capabilitiesChanged = UpdateHaCapabilities();
 
     if (!_state.GlDataFullySent)
